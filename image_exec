@@ -1,0 +1,138 @@
+#!/bin/bash
+
+# A script to run commands in a chroot of a given image.
+#
+# Requires:
+# - apt install qemu-user-static
+#
+# Usage:
+# - sudo ./image_exec -i <image> -p <partition_number> -u <command> [more commands]
+# - sudo ./image_exec -i <input_image> -o <output_image> -p <partition_number> <command> [more commands] 
+#
+# Example:
+# - sudo ./image_exec -i input.img -p 1 -u "apt update && apt upgrade"
+# - sudo ./image_exec -i input.img -o output.img -p 2 "apt update && apt upgrade -y"
+
+QEMU_ARM=/usr/bin/qemu-arm-static
+MOUNT_POINT=""
+LOOPDEV=""
+TMPDIR=""
+PARTITION=1
+
+cleanup() {
+    if [ -n "$MOUNT_POINT" ]; then
+        umount $MOUNT_POINT
+    fi
+    if [ -n "$LOOPDEV" ]; then
+        sudo losetup -d $LOOPDEV
+    fi
+    if [ -n "$TMPDIR" ]; then
+        rm -rf $TMPDIR
+    fi
+}
+
+mount_image() {
+    local image=$1
+    local mountpoint=$2
+    LOOPDEV=$(losetup -f)
+    losetup -P $LOOPDEV $image
+
+    # mount p2 as root
+    mount ${LOOPDEV}p${PARTITION} $mountpoint
+    # mount p1 as boot
+    mkdir -p $mountpoint/boot
+}
+
+clone_image() {
+    local image=$1
+    local newimage=$2
+
+    cp $image $newimage
+}
+
+qemu_chroot_exec() {
+    local arm_root=$1
+    shift
+    # copy qemu-arm-static to the rootfs
+    cp $QEMU_ARM $arm_root/usr/bin/
+
+    # chroot into the rootfs
+    for cmd in "$@"; do
+        echo "Executing: $cmd"
+        chroot $arm_root /bin/bash -c "$cmd"
+    done
+
+    # remove qemu-arm-static from the rootfs
+    rm $arm_root/usr/bin/qemu-arm-static
+}
+
+# parse args
+while getopts "hi:o:p:u" opt; do
+    case $opt in
+        h)
+            echo "Usage: image_exec [options] <command> [more commands]"
+            echo "  -h  Display this help message"
+            echo "  -i  Path to the input image"
+            echo "  -o  Path to the output image"
+            echo "  -p  Partition number to mount (default: 1)"
+            echo "  -u  Update the input image, instead of generating a new output image"
+            exit 0
+            ;;
+        i)
+            INPUT_IMAGE=$OPTARG
+            ;;
+        o)
+            OUTPUT_IMAGE=$OPTARG
+            ;;
+        p)
+            PARTITION=$OPTARG
+            ;;
+        u)
+            UPDATE_IMAGE=1
+            ;;
+    esac
+done
+
+# read the left args as the commands
+shift $((OPTIND-1))
+
+# Check that the input image exists
+if [ ! -f $INPUT_IMAGE ]; then
+    echo "Input image does not exist"
+    exit 1
+fi
+
+# Check that the output image does not exist
+if [ -n "$UPDATE_IMAGE" ] && [ -f $OUTPUT_IMAGE ]; then
+    echo "Output image already exists"
+    exit 1
+fi
+
+# setup cleanup trap
+trap cleanup EXIT
+
+# Create a temporary directory
+TMPDIR=$(mktemp -d)
+mkdir $TMPDIR/mount
+MOUNT_POINT=$TMPDIR/mount
+
+# Mount the image
+if [ -n "$UPDATE_IMAGE" ]; then
+    mount_image $INPUT_IMAGE $MOUNT_POINT
+else
+    # Clone the input image
+    clone_image $INPUT_IMAGE $TMPDIR/image
+
+    # Mount the image
+    mount_image $TMPDIR/image $MOUNT_POINT
+fi
+
+# Execute the commands
+qemu_chroot_exec $TMPDIR/mount "$@"
+
+# Move the image to the output location
+if [ -n "$UPDATE_IMAGE" ]; then
+    mv $TMPDIR/image $OUTPUT_IMAGE
+fi
+
+
