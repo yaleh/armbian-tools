@@ -19,7 +19,7 @@ This tool is used to execute a command on an Armbian image file. It mounts the i
 
 ## qemu_exec
 
-This tools is used to run an Armbian image in QEMU. It's tested with qemu-system-aarch64 in an amd64 host. Both the original Armbian image and Amlogic Armbian (ext4 rootfs) from https://github.com/ophub/amlogic-s9xxx-armbian are supported.
+This tools is used to run an Armbian image in QEMU. It's tested with qemu-system-aarch64 in an amd64 host. Both the original Armbian image and Amlogic Armbian (ext4 and btrfs root filesystem) from https://github.com/ophub/amlogic-s9xxx-armbian are supported.
 
 ### Features
 
