@@ -7,12 +7,83 @@ random_mac() {
     printf '52:54:00:%02X:%02X:%02X' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
 }
 
-# get image file path
-IMAGE_PATH=$1
-MAC=$(random_mac)
+start_qemu(){
+    # read args of ram size, cpu cores and mac address
+    RAM_SIZE=$1
+    CPU_CORES=$2
+    MAC=$3
 
-qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -smp 1 -m 256 \
-    -drive file=qemu_flash/output/flash0.bin,format=raw,if=pflash \
-    -drive file=qemu_flash/output/flash1.bin,format=raw,if=pflash \
-    -drive if=none,file=${IMAGE_PATH},id=scsi0 -device ich9-ahci,id=ahci -device ide-hd,drive=scsi0,bus=ahci.0 \
-    -netdev user,hostfwd=tcp::60022-:22,id=mynet0 -device e1000,netdev=mynet0,mac=52:55:00:d1:55:01
+    # read args of image path
+    IMAGE_PATH=$4
+
+    qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -smp ${CPU_CORES} -m ${RAM_SIZE} \
+        -drive file=qemu_flash/output/flash0.bin,format=raw,if=pflash \
+        -drive file=qemu_flash/output/flash1.bin,format=raw,if=pflash \
+        -drive if=none,file=${IMAGE_PATH},id=scsi0 -device ich9-ahci,id=ahci -device ide-hd,drive=scsi0,bus=ahci.0 \
+        -netdev user,hostfwd=tcp::60022-:22,id=mynet0 -device e1000,netdev=mynet0,mac=${MAC}
+}
+
+RAM_SIZE=
+CPU_CORES=
+MAC=
+
+# parse args
+while getopts "m:c:e:h" opt; do
+    case $opt in
+        m)
+            RAM_SIZE=$OPTARG
+            ;;
+        c)
+            CPU_CORES=$OPTARG
+            ;;
+        e)
+            MAC=$OPTARG
+            ;;
+        h)
+            echo "Usage: qemu_boot [options] <image path>"
+            echo "  -m  RAM size (default: 1024)"
+            echo "  -c  CPU cores (default: 1)"
+            echo "  -e  MAC address (default: random)"
+            echo "  -h  Display this help message"
+            exit 0
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            exit 1
+            ;;
+        :)
+            echo "Option -$OPTARG requires an argument." >&2
+            exit 1
+            ;;
+    esac
+done
+
+shift $((OPTIND-1))
+IMAGE_PATH=$1
+
+# check the image path
+if [ ! -f ${IMAGE_PATH} ]; then
+    echo "Image not found: ${IMAGE_PATH}"
+    exit 1
+fi
+
+# check the ram size
+if [ -z ${RAM_SIZE} ]; then
+    echo "Ram size not specified, use default value 1024"
+    RAM_SIZE=1024
+fi
+
+# check the cpu cores
+if [ -z ${CPU_CORES} ]; then
+    echo "Cpu cores not specified, use default value 1"
+    CPU_CORES=1
+fi
+
+# check the mac address
+if [ -z ${MAC} ]; then
+    echo "Mac address not specified, generate a random one"
+    MAC=$(random_mac)
+fi
+
+echo "Start qemu with ram size ${RAM_SIZE}, cpu cores ${CPU_CORES} and mac address ${MAC}"
+start_qemu ${RAM_SIZE} ${CPU_CORES} ${MAC} ${IMAGE_PATH}
