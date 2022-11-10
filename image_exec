@@ -103,9 +103,15 @@ if [ ! -f $INPUT_IMAGE ]; then
 fi
 
 # Check that the output image does not exist
-if [ -n "$UPDATE_IMAGE" ] && [ -f $OUTPUT_IMAGE ]; then
-    echo "Output image already exists"
-    exit 1
+if [ -z "$UPDATE_IMAGE" ]; then
+    if [ -z "$OUTPUT_IMAGE" ]; then
+        echo "Output image not specified"
+        exit 1
+    fi
+    if [ -f $OUTPUT_IMAGE ]; then
+        echo "Output image already exists"
+        exit 1
+    fi
 fi
 
 # setup cleanup trap
@@ -131,7 +137,7 @@ fi
 qemu_chroot_exec $TMPDIR/mount "$@"
 
 # Move the image to the output location
-if [ -n "$UPDATE_IMAGE" ]; then
+if [ -z "$UPDATE_IMAGE" ]; then
     mv $TMPDIR/image $OUTPUT_IMAGE
 fi
 
