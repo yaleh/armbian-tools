@@ -7,7 +7,8 @@ random_mac() {
     printf '52:54:00:%02X:%02X:%02X' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
 }
 
-start_qemu(){
+# Start QEMU with emulated devices
+start_qemu_emulate(){
     # read args of ram size, cpu cores and mac address
     RAM_SIZE=$1
     CPU_CORES=$2
@@ -20,15 +21,40 @@ start_qemu(){
         -drive file=qemu_flash/output/flash0.bin,format=raw,if=pflash \
         -drive file=qemu_flash/output/flash1.bin,format=raw,if=pflash \
         -drive if=none,file=${IMAGE_PATH},id=scsi0 -device ich9-ahci,id=ahci -device ide-hd,drive=scsi0,bus=ahci.0 \
-        -netdev user,hostfwd=tcp::60022-:22,id=mynet0 -device e1000,netdev=mynet0,mac=${MAC}
+        -netdev user,hostfwd=tcp::60022-:22,id=mynet0 -device e1000,netdev=mynet0,mac=${MAC} \
+        -device virtio-rng-pci,rng=rng0 \
+        -object rng-random,filename=/dev/urandom,id=rng0 \
+        -qmp unix:amd64.socket,server,nowait        
+}
+
+# Start QEMU with virtio devices
+start_qemu_virtio(){
+    # read args of ram size, cpu cores and mac address
+    RAM_SIZE=$1
+    CPU_CORES=$2
+    MAC=$3
+
+    # read args of image path
+    IMAGE_PATH=$4
+
+    qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -smp ${CPU_CORES} -m ${RAM_SIZE} \
+        --accel tcg,thread=multi \
+        -drive file=qemu_flash/output/flash0.bin,format=raw,if=pflash \
+        -drive file=qemu_flash/output/flash1.bin,format=raw,if=pflash \
+        -drive if=virtio,file=${IMAGE_PATH},cache=unsafe,discard=unmap,id=hd0 \
+        -netdev user,hostfwd=tcp::60022-:22,id=mynet0 -device virtio-net-pci,netdev=mynet0,mac=${MAC} \
+        -device virtio-rng-pci,rng=rng0 \
+        -object rng-random,filename=/dev/urandom,id=rng0 \
+        -qmp unix:amd64.socket,server,nowait
 }
 
 RAM_SIZE=
 CPU_CORES=
 MAC=
+VIRTIO=0
 
 # parse args
-while getopts "m:c:e:h" opt; do
+while getopts "m:c:e:v:h" opt; do
     case $opt in
         m)
             RAM_SIZE=$OPTARG
@@ -39,11 +65,15 @@ while getopts "m:c:e:h" opt; do
         e)
             MAC=$OPTARG
             ;;
+        v)
+            VIRTIO=$OPTARG
+            ;;
         h)
             echo "Usage: qemu_boot [options] <image path>"
             echo "  -m  RAM size (default: 1024)"
             echo "  -c  CPU cores (default: 1)"
             echo "  -e  MAC address (default: random)"
+            echo "  -v  Use virtio devices (1 to enable virtio, default: 0)"
             echo "  -h  Display this help message"
             exit 0
             ;;
@@ -85,5 +115,9 @@ if [ -z ${MAC} ]; then
     MAC=$(random_mac)
 fi
 
-echo "Start qemu with ram size ${RAM_SIZE}, cpu cores ${CPU_CORES} and mac address ${MAC}"
-start_qemu ${RAM_SIZE} ${CPU_CORES} ${MAC} ${IMAGE_PATH}
+echo "Start QEMU with ram size ${RAM_SIZE}, cpu cores ${CPU_CORES} and mac address ${MAC}, virtio enabled ${VIRTIO}"
+if [ ${VIRTIO} -eq 1 ]; then
+    start_qemu_virtio ${RAM_SIZE} ${CPU_CORES} ${MAC} ${IMAGE_PATH}
+else
+    start_qemu_emulate ${RAM_SIZE} ${CPU_CORES} ${MAC} ${IMAGE_PATH}
+fi

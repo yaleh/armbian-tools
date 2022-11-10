@@ -57,6 +57,9 @@ sudo qemu_boot [options] <image path>
 
 -e <ethernet MAC address>
     Ethernet MAC address for QEMU, default is random
+
+-v <0/1>
+    Enable/disable virtio devices, default is 0 (disable)
 ```
 
 ## Howto
@@ -73,7 +76,7 @@ sudo ./image_exec -i armbian_5.38_Orangepizero_Ubuntu_bionic_default_4.19.8.img 
 
 Snap installation requires running services including apparmor, snapd, snapd.socket and snapd.seeded.service. To run these services, you need to run the image in QEMU.
 
-```qemu_boot``` starts Linux kernel with ```single``` parameter, so we can walk around the initial setup process of Armbian. After disabling armbian-firstlogin, we can switch to runlevel 3 and start the services.
+```qemu_boot``` starts Linux kernel into run level 1, so we can walk around the initial setup process of Armbian. After disabling armbian-firstlogin, we can switch to runlevel 3 and start the services.
 
 
 - Build flash images
@@ -108,7 +111,8 @@ sudo apt update
 sudo apt install -y snapd
 ```
 
-- Install snap packages
+- Install snap packages (this may take quite a while)
+
 
 ```
 sudo snap install lxd

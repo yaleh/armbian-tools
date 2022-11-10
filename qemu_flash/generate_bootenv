@@ -72,11 +72,6 @@ uenvs=uEnv.txt
 uenv_addr_r=0x44000000
 EOF
 
-echo -n "armbian_qemu_boot="
-urglify_uboot_script <<'EOF'
-run scsi_boot
-EOF
-
 echo -n "scan_dev_for_boot="
 urglify_uboot_script <<'EOF'
 echo Scanning ${devtype} ${devnum}:${distro_bootpart}...
