@@ -17,6 +17,15 @@ This tool is used to execute a command on an Armbian image file. It mounts the i
 - ```sudo ./image_exec -i armbian_5.38_Orangepizero_Ubuntu_bionic_default_4.19.8.img -p 1 -u "apt update && apt upgrade"```
 - ```sudo ./image_exec -i armbian_5.38_Orangepizero_Ubuntu_bionic_default_4.19.8.img -o armbian_5.38_Orangepizero_Ubuntu_bionic_default_4.19.8_updated.img -p 1 "apt update && apt upgrade"```
 
+### Options
+
+```
+-i <image>        Input image file
+-o <image>        Output image file
+-p <partition>    Partition number to mount (default: 1)
+-u                Update the input image, instead of generating a new output image
+```
+
 ## qemu_boot
 
 This tools is used to run an Armbian image in QEMU. It's tested with qemu-system-aarch64 in an amd64 host. Both the original Armbian image and Amlogic Armbian (ext4 and btrfs root filesystem) from https://github.com/ophub/amlogic-s9xxx-armbian are supported.

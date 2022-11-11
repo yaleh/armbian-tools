@@ -19,13 +19,34 @@ LOOPDEV=""
 TMPDIR=""
 PARTITION=1
 
+REBIND_PATHS=(
+    /dev
+    /proc
+    /sys
+)
+
+DEV_REBIND_PATHS=(
+    /dev/pts
+    /dev/shm
+)
+
 cleanup() {
+    # Unmount all bind mounts in reverse order
+    for path in "${DEV_REBIND_PATHS[@]}" "${REBIND_PATHS[@]}" ; do
+        if mountpoint -q "${MOUNT_POINT}${path}"; then
+            umount "${MOUNT_POINT}${path}"
+        fi
+    done
+
+    # Unmount the image
     if [ -n "$MOUNT_POINT" ]; then
         umount $MOUNT_POINT
     fi
     if [ -n "$LOOPDEV" ]; then
         sudo losetup -d $LOOPDEV
     fi
+
+    # Remove the temporary directory
     if [ -n "$TMPDIR" ]; then
         rm -rf $TMPDIR
     fi
@@ -37,10 +58,28 @@ mount_image() {
     LOOPDEV=$(losetup -f)
     losetup -P $LOOPDEV $image
 
-    # mount p2 as root
+    # mount root
     mount ${LOOPDEV}p${PARTITION} $mountpoint
-    # mount p1 as boot
-    mkdir -p $mountpoint/boot
+
+    ls -l $mountpoint
+
+    # check rebind paths exist
+    for path in "${REBIND_PATHS[@]}"; do
+        if [ ! -e "${mountpoint}${path}" ]; then
+            echo "ERROR: ${mountpoint}${path} does not exist"
+            exit 1
+        fi
+    done
+
+    # mount REBIND_PATHS
+    for path in "${REBIND_PATHS[@]}"; do
+        mount --bind $path ${mountpoint}${path}
+    done
+
+    # mount DEV_REBIND_PATHS
+    for path in "${DEV_REBIND_PATHS[@]}"; do
+        mount --bind $path ${mountpoint}${path}
+    done
 }
 
 clone_image() {
