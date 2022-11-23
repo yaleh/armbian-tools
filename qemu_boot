@@ -17,7 +17,7 @@ start_qemu_emulate(){
     # read args of image path
     IMAGE_PATH=$4
 
-    qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -smp ${CPU_CORES} -m ${RAM_SIZE} \
+    qemu-system-aarch64 -machine virt -cpu cortex-a53 -nographic -smp ${CPU_CORES} -m ${RAM_SIZE} \
         -drive file=qemu_flash/output/flash0.bin,format=raw,if=pflash \
         -drive file=qemu_flash/output/flash1.bin,format=raw,if=pflash \
         -drive if=none,file=${IMAGE_PATH},id=scsi0 -device ich9-ahci,id=ahci -device ide-hd,drive=scsi0,bus=ahci.0 \
@@ -37,7 +37,7 @@ start_qemu_virtio(){
     # read args of image path
     IMAGE_PATH=$4
 
-    qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -smp ${CPU_CORES} -m ${RAM_SIZE} \
+    qemu-system-aarch64 -machine virt -cpu cortex-a53 -nographic -smp ${CPU_CORES} -m ${RAM_SIZE} \
         --accel tcg,thread=multi \
         -drive file=qemu_flash/output/flash0.bin,format=raw,if=pflash \
         -drive file=qemu_flash/output/flash1.bin,format=raw,if=pflash \
