@@ -116,6 +116,8 @@ if [ -z ${MAC} ]; then
 fi
 
 echo "Start QEMU with ram size ${RAM_SIZE}, cpu cores ${CPU_CORES} and mac address ${MAC}, virtio enabled ${VIRTIO}"
+echo "Interrupt QEMU with Ctrl-]"
+stty intr "^]"
 if [ ${VIRTIO} -eq 1 ]; then
     start_qemu_virtio ${RAM_SIZE} ${CPU_CORES} ${MAC} ${IMAGE_PATH}
 else
