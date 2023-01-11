@@ -34,10 +34,18 @@ execute_command() {
     if [[ -z $title ]]; then
         local title=$command
     fi
-    local output=$(eval $command 2>&1)
 
-    # show a dialog with the output
-    whiptail --title "$title" --msgbox "$output" 20 78
+    # create a temp file
+    local temp_file=$(mktemp)
+
+    # execute the command and save the output to the temp file
+    $command > $temp_file 2>&1
+
+    # show the output in a dialog
+    whiptail --title "$title" --textbox --scrolltext $temp_file 20 78
+
+    # remove the temp file
+    rm $temp_file
 }
 
 # clean apt cache, downloaded packages and lists
@@ -50,28 +58,6 @@ clean_apt() {
 
     # clean apt lists
     rm -rf /var/lib/apt/lists/*
-}
-
-# Network menu
-network_menu() {
-    local choice
-    local options=("Setup a ethernet bridge" "Back")
-
-    while true; do
-        choice=$(whiptail --title "Network" --menu "Choose an option" 20 78 10 "${options[@]}" 3>&1 1>&2 2>&3)
-        if [[ -z $choice ]]; then
-            break
-        fi
-
-        case $choice in
-            "Setup a ethernet bridge")
-                network_bridge_menu
-                ;;
-            "Back")
-                break
-                ;;
-        esac
-    done
 }
 
 # clean snap
@@ -152,6 +138,26 @@ snap_menu() {
     done
 }
 
+# btrfs balance menu
+btrfs_balance_menu() {
+    # show a input dialog to get the balance parameters
+    local balance_parameters=$(whiptail --title "Balance BTRFS" --inputbox "Enter the balance parameters" 10 78 " -dusage=50 -musage=50 -dlimit=3 -mlimit=3" 3>&1 1>&2 2>&3)
+
+    # exit if cancel is pressed
+    if [[ $? -ne 0 ]]; then
+        return
+    fi
+
+    # confirm before apply
+    whiptail --title "Balance BTRFS" --yesno "This will balance the BTRFS filesystem. \nAre you sure?" 10 78
+    if [[ $? -ne 0 ]]; then
+        return
+    fi
+
+    # execute the command
+    execute_command "btrfs balance start $balance_parameters /"
+}
+
 # BTRFS menu
 btrfs_menu() {
     local choice
@@ -166,12 +172,7 @@ btrfs_menu() {
 
         case $choice in
             "Balance")
-                # confirm before apply
-                whiptail --title "Balance BTRFS" --yesno "This will balance the BTRFS filesystem. \nAre you sure?" 10 78
-                if [[ $? -ne 0 ]]; then
-                    break
-                fi
-                execute_command "btrfs balance start -dusage=50 -musage=50 -dlimit=3 -mlimit=3 /"
+                btrfs_balance_menu
                 ;;
             "Usage")
                 execute_command "btrfs fi usage /"
@@ -205,7 +206,6 @@ root_user_menu(){
                 ;;
         esac
     done
-
 }
 
 # download patch file and patch armbian-install
@@ -216,7 +216,7 @@ patch_armbian_install() {
     # patch armbian-install
     patch /usr/sbin/armbian-install /tmp/armbian-install.patch
 
-    ls /usr/sbin/armbian-install*
+    ls -al /usr/sbin/armbian-install*
 
     # remove patch file
     rm /tmp/armbian-install.patch
@@ -229,14 +229,61 @@ revert_armbian_install() {
         mv /usr/sbin/armbian-install.orig /usr/sbin/armbian-install
     fi
 
-    ls /usr/sbin/armbian-install*
+    ls -al /usr/sbin/armbian-install*
+}
+
+# armbian flags menu
+armbian_flags_menu() {
+    # get current flags
+    local no_rootfs_resize=$(test -f /root/.no_rootfs_resize && echo "ON" || echo "OFF")
+    local not_logged_in_yet=$(test -f /root/.not_logged_in_yet && echo "ON" || echo "OFF")
+
+
+    # checklist for /root/.no_rootfs_resize and /root/.not_logged_in_yet
+    local flags=("no_rootfs_resize" "Do not resize rootfs" $no_rootfs_resize \
+                "not_logged_in_yet" "Reinitialize on the next logging in" $not_logged_in_yet)
+
+    # show a checklist dialog to get the flags
+    local choice=$(whiptail --title "Armbian flags" --checklist "Choose the flags" 20 78 10 "${flags[@]}" 3>&1 1>&2 2>&3)
+
+    # exit if cancel is pressed
+    if [[ $? -ne 0 ]]; then
+        return
+    fi
+
+    # create /root/.no_rootfs_resize if checked and the file does not exist
+    if [[ $choice == *"no_rootfs_resize"* ]]; then
+        if [[ ! -f /root/.no_rootfs_resize ]]; then
+            touch /root/.no_rootfs_resize
+        fi
+    else
+        # remove /root/.no_rootfs_resize if unchecked and the file exists
+        if [[ -f /root/.no_rootfs_resize ]]; then
+            rm /root/.no_rootfs_resize
+        fi
+    fi
+
+    # create /root/.not_logged_in_yet if checked and the file does not exist
+    if [[ $choice == *"not_logged_in_yet"* ]]; then
+        if [[ ! -f /root/.not_logged_in_yet ]]; then
+            touch /root/.not_logged_in_yet
+        fi
+    else
+        # remove /root/.not_logged_in_yet if unchecked and the file exists
+        if [[ -f /root/.not_logged_in_yet ]]; then
+            rm /root/.not_logged_in_yet
+        fi
+    fi
+    
+    execute_command "ls -al /root/.*"
 }
 
 # Armbian menu
 armbian_menu() {
     local choice
     local options=("Patch" "Patch armbian-install" \
-                    "Revert" "Revert armbian-install patch")
+                    "Revert" "Revert armbian-install patch" \
+                    "Flags" "Armbian installation flags")
 
     while true; do
         choice=$(whiptail --title "Armbian" --menu "Choose an option" 20 78 10 "${options[@]}" 3>&1 1>&2 2>&3)
@@ -265,6 +312,9 @@ armbian_menu() {
                     continue
                 fi
                 execute_command "revert_armbian_install"
+                ;;
+            "Flags")
+                armbian_flags_menu
                 ;;
         esac
     done
