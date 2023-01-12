@@ -1,0 +1,224 @@
+#!/bin/bash
+
+# This script is used to backup & restore following items of LXD:
+# * containers (with snapshots)
+# * images
+# * profiles
+# It is based on the LXD API and uses the LXD client to communicate with the LXD server.
+
+# This script is licensed under the MIT license.
+# (c) 2023 by Yale Huang
+
+BACKUP_DIR=/var/lib/lxd/backups
+RESTORE=false
+FORCE_RESTORE=false
+BACKUP_CONTAINERS=()
+BACKUP_IMAGES=()
+BACKUP_PROFILES=()
+
+# backup containers
+backup_containers() {
+    # make sure the containers directory exists
+    mkdir -p $BACKUP_DIR/containers
+
+    for container in "${BACKUP_CONTAINERS[@]}"; do
+        echo "Backing up container $container"
+        lxc export --compression pigz $container $BACKUP_DIR/containers/$container.tar.gz
+    done
+}
+
+# restore containers
+restore_containers() {
+    for container in "${BACKUP_CONTAINERS[@]}"; do
+        # show error and skip it if the backup file does not exist
+        if [ ! -f $BACKUP_DIR/containers/$container.tar.gz ]; then
+            echo "Error: backup file $BACKUP_DIR/containers/$container.tar.gz does not exist"
+            continue
+        fi
+
+        # show error and skip it if the container already exists and -f is not specified
+        if [ -n "$(lxc list | grep $container)" ] && ! $FORCE_RESTORE; then
+            echo "Error: container $container already exists, use -f to force restore"
+            continue
+        fi
+
+        echo "Restoring container $container"
+        lxc import $BACKUP_DIR/containers/$container.tar.gz $container
+    done
+}
+
+# backup images
+backup_images() {
+    # make sure the images directory exists
+    mkdir -p $BACKUP_DIR/images
+
+    for image in "${BACKUP_IMAGES[@]}"; do
+        echo "Backing up image $image"
+        lxc image export $image $BACKUP_DIR/images/$image.tar.gz
+    done
+}
+
+# restore images
+restore_images() {
+    for image in "${BACKUP_IMAGES[@]}"; do
+        # show error and skip it if the backup file does not exist
+        if [ ! -f $BACKUP_DIR/images/$image.tar.gz ]; then
+            echo "Error: backup file $BACKUP_DIR/images/$image.tar.gz does not exist"
+            continue
+        fi
+
+        # show error and skip it if the image already exists and -f is not specified
+        if [ -n "$(lxc image list | grep $image)" ] && ! $FORCE_RESTORE; then
+            echo "Error: image $image already exists, use -f to force restore"
+            continue
+        fi
+
+        echo "Restoring image $image"
+        lxc image import $BACKUP_DIR/images/$image.tar.gz --alias $image
+    done
+}
+
+# backup profiles
+backup_profiles() {
+    # make sure the profiles directory exists
+    mkdir -p $BACKUP_DIR/profiles
+
+    for profile in "${BACKUP_PROFILES[@]}"; do
+        echo "Backing up profile $profile"
+        lxc profile show $profile > $BACKUP_DIR/profiles/$profile.yaml
+    done
+}
+
+# restore profiles
+restore_profiles() {
+    for profile in "${BACKUP_PROFILES[@]}"; do
+        # show error and skip it if the backup file does not exist
+        if [ ! -f $BACKUP_DIR/profiles/$profile.yaml ]; then
+            echo "Error: backup file $BACKUP_DIR/profiles/$profile.yaml does not exist"
+            continue
+        fi
+
+        # show error and skip it if the profile already exists and -f is not specified
+        if [ -n "$(lxc profile list | grep $profile)" ] && ! $FORCE_RESTORE; then
+            echo "Error: profile $profile already exists, use -f to force restore"
+            continue
+        fi
+
+        echo "Restoring profile $profile"
+        lxc profile create $profile
+        lxc profile edit $profile < $BACKUP_DIR/profiles/$profile.yaml
+    done
+}
+
+# parse args
+while getopts "hd:rCc:Ss:Ii:Vv:Pp:A" opt; do
+    case $opt in
+        h)
+            echo "Usage: $0 [-h] [-d <backup_dir>] [-r] [-f] [-C] [-c <containers>] [-I] [-i <images>] [-P] [-p <profiles>] [-A]"
+            echo "  -h: show this help"
+            echo "  -d: backup directory, default is /var/backups/lxd"
+            echo "  -r: restore backup files"
+            echo "  -f: force restore, overwrite existing containers, snapshots, images or profiles"
+            echo "  -C: backup/restore all containers"
+            echo "  -c: backup/restore containers, comma separated, e.g. c1,c2"
+            echo "  -I: backup/restore all images"
+            echo "  -i: backup/restore images, comma separated, e.g. i1,i2"
+            echo "  -P: backup/restore all profiles"
+            echo "  -p: backup/restore profiles, comma separated, e.g. p1,p2"
+            echo "  -A: backup/restore all containers, snapshots, images and profiles"
+            exit 0
+            ;;
+        d)
+            BACKUP_DIR=$OPTARG
+            ;;
+        r)
+            # show error if containers, snapshots, images or profiles are specified before -r
+            if [ -n "$BACKUP_CONTAINERS" ] || [ -n "$BACKUP_SNAPSHOTS" ] || [ -n "$BACKUP_IMAGES" ] || [ -n "$BACKUP_PROFILES" ]; then
+                echo "Error: -r must be specified before -c, -s, -i, -v or -p"
+                exit 1
+            fi
+            RESTORE=true
+            ;;
+        f)
+            # show error if -r is not specified
+            if ! $RESTORE; then
+                echo "Error: -f must be specified after -r"
+                exit 1
+            fi
+            FORCE_RESTORE=true
+            ;;
+        C)
+            if $RESTORE; then
+                # restore all containers
+                BACKUP_CONTAINERS=($(ls $BACKUP_DIR/containers))
+            else
+                # backup all containers
+                BACKUP_CONTAINERS=($(lxc list -c n --format csv))
+            fi
+            ;;
+        c)
+            IFS=',' read -ra BACKUP_CONTAINERS <<< "$OPTARG"
+            ;;
+        I)
+            if $RESTORE; then
+                # restore all images
+                BACKUP_IMAGES=($(ls $BACKUP_DIR/images))
+            else
+                # backup all images
+                BACKUP_IMAGES=($(lxc image list -c f --format csv))
+            fi
+            ;;
+        i)
+            IFS=',' read -ra BACKUP_IMAGES <<< "$OPTARG"
+            ;;
+        P)
+            if $RESTORE; then
+                # restore all profiles
+                BACKUP_PROFILES=($(ls $BACKUP_DIR/profiles))
+            else
+                # backup all profiles
+                BACKUP_PROFILES=($(lxc profile list --format csv | awk -F ',' '{print $1}'))
+            fi
+            ;;
+        p)
+            IFS=',' read -ra BACKUP_PROFILES <<< "$OPTARG"
+            ;;
+        A)
+            if $RESTORE; then
+                # restore all containers, snapshots, images and profiles
+                BACKUP_CONTAINERS=($(ls $BACKUP_DIR/containers))
+                BACKUP_IMAGES=($(ls $BACKUP_DIR/images))
+                BACKUP_PROFILES=($(ls $BACKUP_DIR/profiles))
+            else
+                # backup all containers, snapshots, images and profiles
+                BACKUP_CONTAINERS=($(lxc list -c n --format csv))
+                BACKUP_IMAGES=($(lxc image list -c f --format csv))
+                BACKUP_PROFILES=($(lxc profile list --format csv | awk -F, '{print $1}'))
+            fi
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            exit 1
+            ;;
+        :)
+            echo "Option -$OPTARG requires an argument." >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$RESTORE" = false ]; then
+    # backup
+    backup_containers
+    backup_images
+    backup_profiles
+
+    # show backup directory and files
+    echo "Backup directory: $BACKUP_DIR"
+    ls -l $BACKUP_DIR
+else
+    # restore
+    restore_profiles
+    restore_images
+    restore_containers
+fi
