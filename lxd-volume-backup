@@ -1,0 +1,202 @@
+#!/bin/bash
+
+# This script is used to backup and restore LXD volumes.
+
+RESTORE=false
+BACKUP_DIR="/var/lib/lxd/backups"
+BACKUP_VOLUME_PATTERNS=( ".*/.*" )
+BACKUP_VOLUMES=()
+LIST_VOLUMES_ONLY=false
+
+# split a volume pattern into storage pattern and volume pattern
+split_volume_pattern() {
+    # split the volume pattern into storage pattern and volume pattern
+    IFS='/' read -ra VOLUME_PATTERN <<< "$1"
+
+    # get the storage pattern
+    if [ ${#VOLUME_PATTERN[@]} -eq 2 ]; then
+        STORAGE_PATTERN=${VOLUME_PATTERN[0]}
+    else
+        STORAGE_PATTERN=".*"
+    fi
+
+    # get the volume pattern
+    if [ ${#VOLUME_PATTERN[@]} -gt 0 ]; then
+        VOLUME_PATTERN=${VOLUME_PATTERN[-1]}
+    else
+        VOLUME_PATTERN=".*"
+    fi
+
+    # return the storage pattern and volume pattern in an array
+    echo "$STORAGE_PATTERN $VOLUME_PATTERN"
+}
+
+# get volumes
+get_volumes() {
+    # go through all volume patterns
+    for volume_pattern in "${BACKUP_VOLUME_PATTERNS[@]}"; do
+        # split the volume pattern into storage pattern and volume pattern
+        IFS=' ' read -ra VOLUME_PATTERN <<< "$(split_volume_pattern $volume_pattern)"
+
+        # get the storage pattern and volume pattern
+        STORAGE_PATTERN=${VOLUME_PATTERN[0]}
+        VOLUME_PATTERN=${VOLUME_PATTERN[1]}
+
+        # get storages matching the storage pattern
+        STORAGES=($(lxc storage list --format csv | awk -F ',' '{print $1}' | grep -E "$STORAGE_PATTERN"))
+
+        # go through all storages
+        for storage in "${STORAGES[@]}"; do
+            # get volumes of type custom and matching the volume pattern
+            VOLUMES=($(lxc storage volume list $storage --format csv | grep -E "^custom," | awk -F ',' '{print $2}' | grep -E "$VOLUME_PATTERN"))
+
+            for volume in "${VOLUMES[@]}"; do
+                # add the volume to the list of volumes to backup
+                BACKUP_VOLUMES+=("$storage/$volume")
+            done
+        done
+    done
+}
+
+# get backups
+get_backups() {
+    # go through all volume patterns
+    for volume_pattern in "${BACKUP_VOLUME_PATTERNS[@]}"; do
+        # split the volume pattern into storage pattern and volume pattern
+        IFS=' ' read -ra VOLUME_PATTERN <<< "$(split_volume_pattern $volume_pattern)"
+
+        # get the storage pattern and volume pattern
+        STORAGE_PATTERN=${VOLUME_PATTERN[0]}
+        VOLUME_PATTERN=${VOLUME_PATTERN[1]}
+
+        # get storages folder matching the storage pattern
+        STORAGES=($(ls $BACKUP_DIR/volumes | grep -E "$STORAGE_PATTERN"))
+
+        # go through all storage folders
+        for storage in "${STORAGES[@]}"; do
+            # get volumes matching the volume pattern, remove the .tar.gz extension
+            VOLUMES=($(ls $BACKUP_DIR/volumes/$storage | grep -E "$VOLUME_PATTERN" | sed 's/\.tar\.gz$//'))
+
+            for volume in "${VOLUMES[@]}"; do
+                # add the volume to the list of volumes to backup
+                BACKUP_VOLUMES+=("$storage/$volume")
+            done
+        done
+
+    done
+
+}
+
+# backup volumes
+backup_volumes() {
+    # make sure the volumes directory exists
+    mkdir -p $BACKUP_DIR/volumes
+
+    get_volumes
+
+    if $LIST_VOLUMES_ONLY; then
+        echo "Volumes to backup:"
+        for volume in "${BACKUP_VOLUMES[@]}"; do
+            echo "  $volume"
+        done
+        exit 0
+    fi
+
+    for volume in "${BACKUP_VOLUMES[@]}"; do
+        echo "Backing up volume $volume"
+        # get the storage name and volume name
+        IFS='/' read -ra VOLUME <<< "$volume"
+        STORAGE=${VOLUME[0]}
+        VOLUME=${VOLUME[1]}
+
+        # create the directory for the storage if it does not exist
+        mkdir -p $BACKUP_DIR/volumes/$STORAGE
+
+        # backup the volume
+        lxc storage volume export $STORAGE $VOLUME $BACKUP_DIR/volumes/$STORAGE/$VOLUME.tar.gz --compression pigz
+    done
+}
+
+# restore volumes
+restore_volumes() {
+    # print error and exit if the backup directory does not exist
+    if [ ! -d $BACKUP_DIR/volumes ]; then
+        echo "Error: backup directory $BACKUP_DIR/volumes does not exist"
+        exit 1
+    fi
+
+    get_backups
+
+    for volume in "${BACKUP_VOLUMES[@]}"; do
+        # get the storage name and volume name
+        IFS='/' read -ra VOLUME <<< "$volume"
+        STORAGE=${VOLUME[0]}
+        VOLUME=${VOLUME[1]}
+
+        # show error and skip it if the backup file does not exist
+        if [ ! -f $BACKUP_DIR/volumes/$volume.tar.gz ]; then
+            echo "Error: backup file $BACKUP_DIR/volumes/$volume.tar.gz does not exist"
+            continue
+        fi        
+
+        # show error and skip it if the volume already exists and -f is not specified
+        if [ "$(lxc storage volume list $STORAGE --format csv | grep -E "^custom,$VOLUME,")" ] && ! $FORCE_RESTORE; then
+            echo "Error: volume $volume already exists"
+            continue
+        fi
+
+        echo "Restoring volume $volume"
+        # create the volume
+        # lxc storage volume create $STORAGE $VOLUME
+
+        # restore the volume
+        lxc storage volume import $STORAGE $BACKUP_DIR/volumes/$volume.tar.gz $VOLUME
+    done
+}
+
+# parse args
+while getopts "rd:fVv:lh" opt; do
+    case $opt in
+        r)
+            RESTORE=true
+            ;;
+        d)
+            BACKUP_DIR=$OPTARG
+            ;;
+        f)
+            FORCE_RESTORE=true
+            ;;
+        V)
+            BACKUP_VOLUME_PATTERNS=(".*/.*")
+            ;;
+        v)
+            # comma separated list of volume patterns
+            IFS=',' read -ra BACKUP_VOLUME_PATTERNS <<< "$OPTARG"
+            ;;
+        l)
+            LIST_VOLUMES_ONLY=true
+            ;;
+        h)
+            echo "Usage: lxd-volume-backup [-r] [-d BACKUP_DIR] [-f] [-V] [-v VOLUME_PATTERN] [-l] [-h]"
+            echo "  -r: restore volumes"
+            echo "  -d: backup directory (default: $BACKUP_DIR)"
+            echo "  -f: force restore"
+            echo "  -V: backup all volumes"
+            echo "  -v: comma separated list of volume patterns (default: ${BACKUP_VOLUME_PATTERNS[@]})"
+            echo "  -l: list volumes to backup, do not backup"
+            echo "  -h: show help"
+            exit 0
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# backup or restore volumes
+if $RESTORE; then
+    restore_volumes
+else
+    backup_volumes
+fi

@@ -12,6 +12,7 @@
 BACKUP_DIR=/var/lib/lxd/backups
 RESTORE=false
 FORCE_RESTORE=false
+THIN_MODE=false
 BACKUP_CONTAINERS=()
 BACKUP_IMAGES=()
 BACKUP_PROFILES=()
@@ -23,7 +24,15 @@ backup_containers() {
 
     for container in "${BACKUP_CONTAINERS[@]}"; do
         echo "Backing up container $container"
-        lxc export --compression pigz $container $BACKUP_DIR/containers/$container.tar.gz
+        if $THIN_MODE; then
+            lxc export --instance-only --compression pigz $container $BACKUP_DIR/containers/$container.tar.gz
+        else
+            lxc export --compression pigz $container $BACKUP_DIR/containers/$container.tar.gz
+        fi
+
+        # backup container config
+        echo "Backing up container config $container"
+        lxc config show $container > $BACKUP_DIR/containers/$container.yaml
     done
 }
 
@@ -44,6 +53,12 @@ restore_containers() {
 
         echo "Restoring container $container"
         lxc import $BACKUP_DIR/containers/$container.tar.gz $container
+
+        # restore container config
+        if [ -f $BACKUP_DIR/containers/$container.yaml ]; then
+            echo "Restoring container config $container"
+            lxc config edit $container < $BACKUP_DIR/containers/$container.yaml
+        fi
     done
 }
 
@@ -54,28 +69,64 @@ backup_images() {
 
     for image in "${BACKUP_IMAGES[@]}"; do
         echo "Backing up image $image"
-        lxc image export $image $BACKUP_DIR/images/$image.tar.gz
+        lxc image export $image $BACKUP_DIR/images/
     done
 }
 
 # restore images
 restore_images() {
     for image in "${BACKUP_IMAGES[@]}"; do
-        # show error and skip it if the backup file does not exist
-        if [ ! -f $BACKUP_DIR/images/$image.tar.gz ]; then
-            echo "Error: backup file $BACKUP_DIR/images/$image.tar.gz does not exist"
-            continue
-        fi
-
-        # show error and skip it if the image already exists and -f is not specified
-        if [ -n "$(lxc image list | grep $image)" ] && ! $FORCE_RESTORE; then
-            echo "Error: image $image already exists, use -f to force restore"
-            continue
-        fi
-
-        echo "Restoring image $image"
-        lxc image import $BACKUP_DIR/images/$image.tar.gz --alias $image
+        restore_image $image
     done
+}
+
+# restore image
+restore_image() {
+    local image=$1
+    local image_file
+    # get the .tar.gz or .squashfs file name
+    if [ -f $BACKUP_DIR/images/$image.tar.gz ]; then
+        image_file=$BACKUP_DIR/images/$image.tar.gz
+    elif [ -f $BACKUP_DIR/images/$image.squashfs ]; then
+        image_file=$BACKUP_DIR/images/$image.squashfs
+    else
+        echo "Error: backup file for $image does not exist"
+        return
+    fi
+
+    local meta_file
+    # get the meta-*.tar.gz or meta-*.tar.xz file name
+    if [ -f $BACKUP_DIR/images/meta-$image.tar.gz ]; then
+        meta_file=$BACKUP_DIR/images/meta-$image.tar.gz
+    elif [ -f $BACKUP_DIR/images/meta-$image.tar.xz ]; then
+        meta_file=$BACKUP_DIR/images/meta-$image.tar.xz
+    fi
+
+    # restore image without meta file
+    if [ -z "$meta_file" ]; then
+        echo "Restoring image $image"
+        lxc image import $image_file --alias $image
+    else
+        # restore image with meta file
+        echo "Restoring image $image"
+        lxc image import $meta_file $image_file --alias $image
+    fi
+}
+
+# get backuped images
+get_backuped_images() {
+    local images
+
+    # Find all .tar.gz files in the images directory, but not started with "meta-".
+    # Then remove the prefix of the file name and .tar.gz suffix.
+    images=$(find $BACKUP_DIR/images -type f -name "*.tar.gz" | grep -v "meta-" | sed "s|$BACKUP_DIR/images/||g" | sed "s|.tar.gz||g")
+
+    # Find all .squashfs files in the images directory.
+    # Then remove the prefix of the file name and .squashfs suffix.
+    images="$images $(find $BACKUP_DIR/images -type f -name "*.squashfs" | sed "s|$BACKUP_DIR/images/||g" | sed "s|.squashfs||g")"
+
+    # return the result
+    echo $images
 }
 
 # backup profiles
@@ -85,7 +136,8 @@ backup_profiles() {
 
     for profile in "${BACKUP_PROFILES[@]}"; do
         echo "Backing up profile $profile"
-        lxc profile show $profile > $BACKUP_DIR/profiles/$profile.yaml
+        # dump profile but remove the line following the used_by line
+        lxc profile show $profile | sed '/used_by:/,$d' > $BACKUP_DIR/profiles/$profile.yaml
     done
 }
 
@@ -98,27 +150,31 @@ restore_profiles() {
             continue
         fi
 
-        # show error and skip it if the profile already exists and -f is not specified
-        if [ -n "$(lxc profile list | grep $profile)" ] && ! $FORCE_RESTORE; then
+        # if the profile does not exist, create it
+        if [ -z "$(lxc profile list | grep $profile)" ]; then
+            echo "Creating profile $profile"
+            lxc profile create $profile
+        elif ! $FORCE_RESTORE; then
+            # show error and skip it if the profile already exists and -f is not specified
             echo "Error: profile $profile already exists, use -f to force restore"
             continue
         fi
 
         echo "Restoring profile $profile"
-        lxc profile create $profile
         lxc profile edit $profile < $BACKUP_DIR/profiles/$profile.yaml
     done
 }
 
 # parse args
-while getopts "hd:rCc:Ss:Ii:Vv:Pp:A" opt; do
+while getopts "hd:rfCc:tIi:Vv:Pp:A" opt; do
     case $opt in
         h)
-            echo "Usage: $0 [-h] [-d <backup_dir>] [-r] [-f] [-C] [-c <containers>] [-I] [-i <images>] [-P] [-p <profiles>] [-A]"
+            echo "Usage: $0 [-h] [-d <backup_dir>] [-r] [-f] [-t] [-C] [-c <containers>] [-I] [-i <images>] [-P] [-p <profiles>] [-A]"
             echo "  -h: show this help"
             echo "  -d: backup directory, default is /var/backups/lxd"
             echo "  -r: restore backup files"
             echo "  -f: force restore, overwrite existing containers, snapshots, images or profiles"
+            echo "  -t: thin mode, backup containers without snapshots"
             echo "  -C: backup/restore all containers"
             echo "  -c: backup/restore containers, comma separated, e.g. c1,c2"
             echo "  -I: backup/restore all images"
@@ -133,8 +189,8 @@ while getopts "hd:rCc:Ss:Ii:Vv:Pp:A" opt; do
             ;;
         r)
             # show error if containers, snapshots, images or profiles are specified before -r
-            if [ -n "$BACKUP_CONTAINERS" ] || [ -n "$BACKUP_SNAPSHOTS" ] || [ -n "$BACKUP_IMAGES" ] || [ -n "$BACKUP_PROFILES" ]; then
-                echo "Error: -r must be specified before -c, -s, -i, -v or -p"
+            if [ -n "$BACKUP_CONTAINERS" ] || [ -n "$BACKUP_IMAGES" ] || [ -n "$BACKUP_PROFILES" ]; then
+                echo "Error: -r must be specified before -C, -c, -I, -i, -P or -p"
                 exit 1
             fi
             RESTORE=true
@@ -149,8 +205,8 @@ while getopts "hd:rCc:Ss:Ii:Vv:Pp:A" opt; do
             ;;
         C)
             if $RESTORE; then
-                # restore all containers
-                BACKUP_CONTAINERS=($(ls $BACKUP_DIR/containers))
+                # restore all containers, remove the path directory prefix and .tar.gz suffix
+                BACKUP_CONTAINERS=($(ls $BACKUP_DIR/containers/*.tar.gz | sed "s|$BACKUP_DIR/containers/||g" | sed 's/.tar.gz//g'))
             else
                 # backup all containers
                 BACKUP_CONTAINERS=($(lxc list -c n --format csv))
@@ -159,13 +215,16 @@ while getopts "hd:rCc:Ss:Ii:Vv:Pp:A" opt; do
         c)
             IFS=',' read -ra BACKUP_CONTAINERS <<< "$OPTARG"
             ;;
+        t)
+            THIN_MODE=true
+            ;;
         I)
             if $RESTORE; then
-                # restore all images
-                BACKUP_IMAGES=($(ls $BACKUP_DIR/images))
+                # restore all tar.gz images
+                BACKUP_IMAGES=($(get_backuped_images))
             else
                 # backup all images
-                BACKUP_IMAGES=($(lxc image list -c f --format csv))
+                BACKUP_IMAGES=($(lxc image list -c F --format csv))
             fi
             ;;
         i)
@@ -173,8 +232,8 @@ while getopts "hd:rCc:Ss:Ii:Vv:Pp:A" opt; do
             ;;
         P)
             if $RESTORE; then
-                # restore all profiles
-                BACKUP_PROFILES=($(ls $BACKUP_DIR/profiles))
+                # restore all profiles, remove the path directory and ext from the profile name
+                BACKUP_PROFILES=($(ls $BACKUP_DIR/profiles | sed 's/\(.*\)\..*/\1/'))
             else
                 # backup all profiles
                 BACKUP_PROFILES=($(lxc profile list --format csv | awk -F ',' '{print $1}'))
